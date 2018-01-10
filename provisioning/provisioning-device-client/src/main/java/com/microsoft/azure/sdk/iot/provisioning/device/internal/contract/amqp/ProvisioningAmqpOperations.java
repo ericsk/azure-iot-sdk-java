@@ -29,6 +29,7 @@ public class ProvisioningAmqpOperations extends AmqpDeviceOperations implements 
     private static final String CLIENT_VERSION_IDENTIFIER_KEY = "com.microsoft:client-version";
 
     private static final int MAX_WAIT_TO_SEND_MSG = 1*60*1000; // 1 minute timeout
+    private static final long MAX_WAIT_TO_OPEN_AMQP_CONNECTION = 3*60*1000; //3 minute timeout
 
     private AmqpsConnection amqpConnection;
     private final Queue<AmqpMessage> receivedMessages = new LinkedBlockingQueue<>();
@@ -115,10 +116,10 @@ public class ProvisioningAmqpOperations extends AmqpDeviceOperations implements 
      * Opens the Amqp connection
      * @param registrationId The specified registration id for the connection
      * @param sslContext The SSLContext that will get used for this connection
-     * @param isX509Cert Indicates if using x509 or TPM
+     * @param saslHandler custom handler for sasl logic. May be null if no sasl frames are expected
      * @throws ProvisioningDeviceConnectionException if connection could not succeed for any reason.
      */
-    public void open(String registrationId, SSLContext sslContext, boolean isX509Cert, boolean useWebSockets) throws ProvisioningDeviceConnectionException
+    public void open(String registrationId, SSLContext sslContext, SaslHandler saslHandler, boolean useWebSockets) throws ProvisioningDeviceConnectionException
     {
         // SRS_ProvisioningAmqpOperations_07_003: [If amqpConnection is not null and is connected, open shall do nothing .]
         if (this.amqpConnection == null || !this.amqpConnection.isConnected())
@@ -141,11 +142,11 @@ public class ProvisioningAmqpOperations extends AmqpDeviceOperations implements 
                 // SRS_ProvisioningAmqpOperations_07_005: [This method shall construct the Link Address with /<scopeId>/registrations/<registrationId>.]
                 this.amqpLinkAddress = String.format(AMQP_ADDRESS_FMT, this.idScope, registrationId);
 
-                this.amqpConnection = new AmqpsConnection(this.hostName, this, sslContext, !isX509Cert, useWebSockets);
+                this.amqpConnection = new AmqpsConnection(this.hostName, this, sslContext, saslHandler, useWebSockets);
 
                 this.amqpConnection.setListener(this);
 
-                this.amqpConnection.open();
+                this.amqpConnection.openAsync();
             }
             catch (Exception ex)
             {
@@ -219,6 +220,28 @@ public class ProvisioningAmqpOperations extends AmqpDeviceOperations implements 
         if (responseCallback == null)
         {
             throw new ProvisioningDeviceClientException("responseCallback cannot be null");
+        }
+
+        //wait for AMQP connection to be opened
+        long millisecondsElapsed = 0;
+        long waitStartTime = System.currentTimeMillis();
+        while (!this.amqpConnection.isConnected() && millisecondsElapsed < MAX_WAIT_TO_OPEN_AMQP_CONNECTION)
+        {
+            try
+            {
+                Thread.sleep(1000);
+            }
+            catch (InterruptedException e)
+            {
+                throw new ProvisioningDeviceClientException("Provisioning device client encountered an exception while waiting for amqps connection to open.", e);
+            }
+
+            millisecondsElapsed = System.currentTimeMillis() - waitStartTime;
+        }
+
+        if (millisecondsElapsed >= MAX_WAIT_TO_OPEN_AMQP_CONNECTION)
+        {
+            throw new ProvisioningDeviceClientException("Provisioning device client timed out while waiting for amqps connection to open.");
         }
 
         // SRS_ProvisioningAmqpOperations_07_010: [This method shall send the Register AMQP Provisioning message.]

@@ -32,7 +32,10 @@ public class AmqpReactor
         this.reactor.setTimeout(REACTOR_TIMEOUT);
         this.reactor.start();
 
-        while(this.reactor.process()){}
+        while(this.reactor.process())
+        {
+            //TODO errors from reactor are just being swallowed right now
+        }
         this.reactor.stop();
         this.reactor.process();
         this.reactor.free();
